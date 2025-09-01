@@ -63,6 +63,12 @@ function Navbar() {
                 Settings
               </Link>
             </li>
+            <li className="nav-item">
+              <Link className={`nav-link ${isActive('/ai-reminder')}`} to="/ai-reminder">
+                <i className="fas fa-bell me-1"></i>
+                AI Reminder (Test)
+              </Link>
+            </li>
           </ul>
           
           <ul className="navbar-nav">
