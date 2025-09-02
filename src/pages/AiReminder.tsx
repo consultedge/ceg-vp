@@ -19,7 +19,7 @@ import {
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
-import axios from 'axios';
+import { API_CONFIG, chatAPI, customerAPI, fileAPI, suspiciousAPI, healthCheck } from '../config/api-final';
 
 // Type declarations for Web Speech API
 declare global {
@@ -105,9 +105,6 @@ const AiReminder: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // API Base URL - should be configured based on environment
-  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3000';
-
   useEffect(() => {
     initializeSpeechRecognition();
     return () => {
@@ -191,8 +188,8 @@ const AiReminder: React.FC = () => {
     e.preventDefault();
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/clients`, clientData);
-      if (response.data.success) {
+      const response = await customerAPI.create(clientData);
+      if (response.success) {
         setSuccess('Client data saved successfully');
         setAudioInterfaceVisible(true);
         startAIConversation();
@@ -241,16 +238,25 @@ const AiReminder: React.FC = () => {
     setCurrentTranscript('');
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/chat`, {
+      const response = await chatAPI.sendMessage({
         message: transcript,
         clientData: clientData,
         sessionId: generateSessionId(),
       });
 
-      if (response.data.success) {
-        const aiResponse = response.data.response;
+      if (response.success) {
+        const aiResponse = response.response;
         addMessage('ai', aiResponse);
-        speakText(aiResponse);
+
+        // Play audio if available
+        if (response.audioUrl) {
+          if (audioRef.current) {
+            audioRef.current.src = response.audioUrl;
+            audioRef.current.play();
+          }
+        } else {
+          speakText(aiResponse);
+        }
       }
     } catch (error) {
       console.error('API error:', error);
@@ -289,21 +295,7 @@ const AiReminder: React.FC = () => {
 
   const speakText = async (text: string) => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/polly/synthesize`, {
-        text: text,
-        voiceId: 'Joanna',
-        outputFormat: 'mp3',
-      });
-
-      if (response.data.success && response.data.audioUrl) {
-        if (audioRef.current) {
-          audioRef.current.src = response.data.audioUrl;
-          audioRef.current.play();
-        }
-      }
-    } catch (error) {
-      console.error('Polly error:', error);
-      // Fallback to browser TTS
+      // Use browser TTS as fallback since Polly endpoint might not be available
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.9;
       utterance.pitch = 1;
@@ -320,6 +312,8 @@ const AiReminder: React.FC = () => {
       }
 
       speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error('TTS error:', error);
     }
   };
 
@@ -378,7 +372,7 @@ const AiReminder: React.FC = () => {
     <LocalizationProvider dateAdapter={AdapterDateFns}>
       <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
         <Typography variant="h4" component="h1" gutterBottom>
-          AI Reminder (Test)
+          AI Reminder (Connected to AWS)
         </Typography>
 
         {!audioInterfaceVisible ? (
