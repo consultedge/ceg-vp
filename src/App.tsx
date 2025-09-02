@@ -8,7 +8,7 @@ import '@aws-amplify/ui-react/styles.css';
 
 // Components
 import Layout from './components/Layout/Layout';
-import Dashboard from './pages/Dashboard/Dashboard';
+import Dashboard from './pages/Dashboard-with-tabs';
 import Customers from './pages/Customers/Customers';
 import Calls from './pages/Calls/Calls';
 import Analytics from './pages/Analytics/Analytics';
