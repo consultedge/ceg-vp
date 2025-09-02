@@ -69,7 +69,6 @@ const Layout: React.FC<LayoutProps> = ({ children, user, signOut }) => {
     { text: 'Analytics', icon: <Analytics />, path: '/analytics' },
     { text: 'File Upload', icon: <Upload />, path: '/upload' },
     { text: 'Settings', icon: <Settings />, path: '/settings' },
-    { text: 'AI Reminder (Test)', icon: <Reminder />, path: '/ai-reminder' },
   ];
 
   const drawer = (
