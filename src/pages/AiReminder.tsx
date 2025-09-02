@@ -1,543 +1,424 @@
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  Container,
-  Typography,
-  Paper,
-  TextField,
-  Button,
-  Box,
-  Grid,
-  Alert,
-  Card,
-  CardContent,
-  Chip,
-} from '@mui/material';
-import {
-  Mic,
-  MicOff,
-} from '@mui/icons-material';
-import { DatePicker } from '@mui/x-date-pickers/DatePicker';
-import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
-import { API_CONFIG, chatAPI, customerAPI, fileAPI, suspiciousAPI, healthCheck } from '../config/api-final';
 
-// Type declarations for Web Speech API
-declare global {
-  interface Window {
-    webkitSpeechRecognition: any;
-    SpeechRecognition: any;
-  }
-}
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  maxAlternatives: number;
-  start(): void;
-  stop(): void;
-  onstart: ((this: SpeechRecognition, ev: Event) => any) | null;
-  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
-  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
-  onend: ((this: SpeechRecognition, ev: Event) => any) | null;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-}
-
-interface SpeechRecognitionResultList {
-  readonly length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  readonly length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-  isFinal: boolean;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface ClientData {
-  name: string;
-  mobile: string;
-  totalDue: number;
-  emiAmount: number;
-  dueDate: string;
-}
-
-interface Message {
-  id: string;
-  sender: 'ai' | 'user';
-  text: string;
-  timestamp: Date;
-}
-
-const AiReminder: React.FC = () => {
-  const [clientData, setClientData] = useState<ClientData>({
-    name: '',
-    mobile: '',
-    totalDue: 0,
-    emiAmount: 0,
-    dueDate: '',
-  });
-  const [messages, setMessages] = useState<Message[]>([]);
+const AiReminderUpdated: React.FC = () => {
+  const [clientName, setClientName] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
+  const [totalDue, setTotalDue] = useState('');
+  const [emiAmount, setEmiAmount] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [statusText, setStatusText] = useState('Ready to start');
+  const [statusClass, setStatusClass] = useState('status-idle');
+  const [conversationLog, setConversationLog] = useState<{ sender: string; message: string; time: string }[]>([]);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const synthesisRef = useRef(window.speechSynthesis);
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [status, setStatus] = useState('idle');
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [audioInterfaceVisible, setAudioInterfaceVisible] = useState(false);
-  const [currentTranscript, setCurrentTranscript] = useState('');
-  const [recognition, setRecognition] = useState<SpeechRecognition | null>(null);
-  const [speechTimeout, setSpeechTimeout] = useState<NodeJS.Timeout | null>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentTranscriptRef = useRef('');
+  const speechTimeoutRef = useRef<number | null>(null);
+  const clientDataRef = useRef<any>({});
 
   useEffect(() => {
-    initializeSpeechRecognition();
-    return () => {
-      if (recognition) {
-        recognition.stop();
-      }
-      if (speechTimeout) {
-        clearTimeout(speechTimeout);
-      }
-    };
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      setErrorMessage('Your browser does not support speech recognition. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+    setupSpeechRecognition();
   }, []);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const initializeSpeechRecognition = () => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
-      const recognitionInstance = new SpeechRecognition();
-
-      recognitionInstance.continuous = true;
-      recognitionInstance.interimResults = true;
-      recognitionInstance.lang = 'en-US';
-      recognitionInstance.maxAlternatives = 1;
-
-      recognitionInstance.onstart = () => {
-        setStatus('listening');
-        setIsListening(true);
-        setCurrentTranscript('');
-      };
-
-      recognitionInstance.onresult = (event) => {
-        let finalTranscript = '';
-        let interimTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-
-        if (finalTranscript) {
-          setCurrentTranscript(prev => prev + finalTranscript);
-          processUserSpeech(finalTranscript);
-        }
-
-        if (interimTranscript) {
-          setStatus(`listening: "${interimTranscript}"`);
-        }
-      };
-
-      recognitionInstance.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        setError(`Speech recognition error: ${event.error}`);
-        setIsListening(false);
-        setStatus('idle');
-      };
-
-      recognitionInstance.onend = () => {
-        setIsListening(false);
-        if (!isProcessing) {
-          setStatus('idle');
-        }
-      };
-
-      setRecognition(recognitionInstance);
-    } else {
-      setError('Speech recognition not supported in this browser');
+  const setupSpeechRecognition = () => {
+    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    if (!SpeechRecognition) {
+      setErrorMessage('Speech recognition not supported in this browser.');
+      return;
     }
-  };
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.maxAlternatives = 1;
 
-  const handleFormSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    try {
-      const response = await customerAPI.create(clientData);
-      if (response.success) {
-        setSuccess('Client data saved successfully');
-        setAudioInterfaceVisible(true);
-        startAIConversation();
-      }
-    } catch (error) {
-      console.error('Error saving client data:', error);
-      setError('Failed to save client data');
-      setAudioInterfaceVisible(true);
-      startAIConversation();
-    }
-  };
-
-  const startAIConversation = () => {
-    const greeting = generateGreeting();
-    addMessage('ai', greeting);
-    speakText(greeting);
-  };
-
-  const generateGreeting = () => {
-    const dueDate = new Date(clientData.dueDate);
-    const today = new Date();
-    const daysUntilDue = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
-    let greeting = `Hello ${clientData.name}, this is an automated reminder from your loan service provider. `;
-
-    if (daysUntilDue > 0) {
-      greeting += `Your EMI of ₹${clientData.emiAmount} is due in ${daysUntilDue} days on ${dueDate.toLocaleDateString()}. `;
-    } else if (daysUntilDue === 0) {
-      greeting += `Your EMI of ₹${clientData.emiAmount} is due today. `;
-    } else {
-      greeting += `Your EMI of ₹${clientData.emiAmount} was due ${Math.abs(daysUntilDue)} days ago. `;
-    }
-
-    greeting += `Your current outstanding amount is ₹${clientData.totalDue}. How can I assist you today?`;
-
-    return greeting;
-  };
-
-  const processUserSpeech = async (transcript: string) => {
-    if (isProcessing) return;
-
-    setIsProcessing(true);
-    setStatus('processing');
-
-    addMessage('user', transcript);
-    setCurrentTranscript('');
-
-    try {
-      const response = await chatAPI.sendMessage({
-        message: transcript,
-        clientData: clientData,
-        sessionId: generateSessionId(),
-      });
-
-      if (response.success) {
-        const aiResponse = response.response;
-        addMessage('ai', aiResponse);
-
-        // Play audio if available
-        if (response.audioUrl) {
-          if (audioRef.current) {
-            audioRef.current.src = response.audioUrl;
-            audioRef.current.play();
-          }
-        } else {
-          speakText(aiResponse);
-        }
-      }
-    } catch (error) {
-      console.error('API error:', error);
-      const fallbackResponse = generateFallbackResponse(transcript);
-      addMessage('ai', fallbackResponse);
-      speakText(fallbackResponse);
-    }
-
-    setTimeout(() => {
-      setIsProcessing(false);
-      if (isListening) {
-        setStatus('listening');
-      } else {
-        setStatus('idle');
-      }
-    }, 1000);
-  };
-
-  const generateFallbackResponse = (input: string) => {
-    const lowerInput = input.toLowerCase();
-
-    if (lowerInput.includes('paid') || lowerInput.includes('payment')) {
-      return `Thank you for confirming your payment, ${clientData.name}. Please ensure the payment is processed before the due date.`;
-    }
-
-    if (lowerInput.includes('balance') || lowerInput.includes('outstanding')) {
-      return `Your current outstanding loan amount is ₹${clientData.totalDue}. Your next EMI is due on ${new Date(clientData.dueDate).toLocaleDateString()}.`;
-    }
-
-    if (lowerInput.includes('emi') || lowerInput.includes('installment')) {
-      return `Your monthly EMI amount is ₹${clientData.emiAmount}. The due date is ${new Date(clientData.dueDate).toLocaleDateString()}.`;
-    }
-
-    return `I understand your concern, ${clientData.name}. For detailed assistance, please contact our customer service.`;
-  };
-
-  const speakText = async (text: string) => {
-    try {
-      // Use browser TTS as fallback since Polly endpoint might not be available
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-
-      const voices = speechSynthesis.getVoices();
-      const preferredVoice = voices.find(voice =>
-        voice.name.includes('Joanna') ||
-        voice.name.includes('Female')
-      );
-
-      if (preferredVoice) {
-        utterance.voice = preferredVoice;
-      }
-
-      speechSynthesis.speak(utterance);
-    } catch (error) {
-      console.error('TTS error:', error);
-    }
-  };
-
-  const addMessage = (sender: 'ai' | 'user', text: string) => {
-    const message: Message = {
-      id: Date.now().toString(),
-      sender,
-      text,
-      timestamp: new Date(),
+    recognition.onstart = () => {
+      setStatusText('Listening...');
+      setStatusClass('status-listening');
+      setIsListening(true);
+      currentTranscriptRef.current = '';
     };
-    setMessages(prev => [...prev, message]);
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interimTranscript = '';
+      let finalTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      if (finalTranscript) {
+        currentTranscriptRef.current += finalTranscript;
+        if (!isProcessing) {
+          processUserSpeech(currentTranscriptRef.current.trim());
+          return;
+        }
+      }
+
+      if (interimTranscript) {
+        setStatusText(`Listening... "${interimTranscript}"`);
+      }
+
+      if (speechTimeoutRef.current) {
+        clearTimeout(speechTimeoutRef.current);
+      }
+
+      if (currentTranscriptRef.current.trim() && !isProcessing) {
+        speechTimeoutRef.current = window.setTimeout(() => {
+          if (currentTranscriptRef.current.trim() && !isProcessing) {
+            processUserSpeech(currentTranscriptRef.current.trim());
+          }
+        }, 3000);
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      if (event.error === 'not-allowed') {
+        setErrorMessage('Microphone access denied. Please allow microphone access and try again.');
+        stopListening();
+      } else if (event.error === 'no-speech') {
+        // Ignore no-speech errors
+      } else if (event.error === 'network') {
+        setErrorMessage('Network error occurred. Please check your connection.');
+      } else {
+        setErrorMessage('Speech recognition error: ' + event.error);
+      }
+    };
+
+    recognition.onend = () => {
+      if (isListening && !isProcessing) {
+        setTimeout(() => {
+          if (isListening && !isProcessing) {
+            try {
+              recognition.start();
+            } catch (error) {
+              setStatusText('Recognition stopped');
+              setStatusClass('status-idle');
+              setIsListening(false);
+            }
+          }
+        }, 100);
+      } else {
+        setStatusText('Stopped listening');
+        setStatusClass('status-idle');
+        setIsListening(false);
+      }
+    };
+
+    recognitionRef.current = recognition;
+  };
+
+  const startListening = () => {
+    if (!recognitionRef.current) {
+      setErrorMessage('Speech recognition not supported.');
+      return;
+    }
+    if (isListening) {
+      stopListening();
+      setTimeout(startListening, 500);
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(() => {
+      setIsListening(true);
+      setIsProcessing(false);
+      currentTranscriptRef.current = '';
+      recognitionRef.current!.start();
+    }).catch(() => {
+      setErrorMessage('Microphone access is required for voice interaction.');
+    });
+  };
+
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    setIsListening(false);
+    setIsProcessing(false);
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    setStatusText('Stopped');
+    setStatusClass('status-idle');
+  };
+
+  const processUserSpeech = (transcript: string) => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    setStatusText('Processing...');
+    setStatusClass('status-processing');
+    addMessageToLog('user', transcript);
+    currentTranscriptRef.current = '';
+
+    // Call backend API for processing
+    fetch(`${process.env.REACT_APP_API_BASE_URL}/api/chat/voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transcript,
+        clientData: clientDataRef.current,
+        sessionId: generateSessionId(),
+        confidence: 0.9
+      }),
+    }).then(res => res.json())
+      .then(data => {
+        const response = data.response || 'Sorry, I did not understand that.';
+        addMessageToLog('ai', response);
+        speakText(response);
+      })
+      .catch(() => {
+        const fallbackResponse = generateResponse(transcript.toLowerCase());
+        addMessageToLog('ai', fallbackResponse);
+        speakText(fallbackResponse);
+      })
+      .finally(() => {
+        setTimeout(() => {
+          setIsProcessing(false);
+          if (isListening) {
+            setStatusText('Listening...');
+            setStatusClass('status-listening');
+          }
+        }, 1000);
+      });
   };
 
   const generateSessionId = () => {
     return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
   };
 
-  const startListening = () => {
-    if (recognition && !isListening) {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(() => {
-          recognition.start();
-        })
-        .catch(error => {
-          setError('Microphone access denied');
-        });
-    }
+  const addMessageToLog = (sender: string, message: string) => {
+    const time = new Date().toLocaleTimeString();
+    setConversationLog(prev => [...prev, { sender, message, time }]);
   };
 
-  const stopListening = () => {
-    if (recognition && isListening) {
-      recognition.stop();
+  const speakText = (text: string) => {
+    setStatusText('Speaking...');
+    setStatusClass('status-speaking');
+    if (isListening) {
+      stopListening();
     }
-  };
 
-  const testMicrophone = () => {
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(() => {
-        setSuccess('Microphone access granted');
+    // Try AWS Polly via API
+    fetch(`${process.env.REACT_APP_API_BASE_URL}/api/polly/synthesize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voiceId: 'Kajal', outputFormat: 'mp3' }),
+    }).then(res => res.json())
+      .then(data => {
+        if (data.success && data.audioUrl) {
+          const audio = new Audio(data.audioUrl);
+          audio.onended = () => {
+            if (isListening) {
+              startListening();
+            } else {
+              setStatusText('Ready');
+              setStatusClass('status-idle');
+            }
+          };
+          audio.play();
+        } else {
+          fallbackSpeak(text);
+        }
       })
       .catch(() => {
-        setError('Microphone access denied');
+        fallbackSpeak(text);
       });
   };
 
-  const getStatusColor = () => {
-    switch (status.split(':')[0]) {
-      case 'listening': return 'success';
-      case 'processing': return 'warning';
-      case 'speaking': return 'info';
-      default: return 'default';
+  const fallbackSpeak = (text: string) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    utterance.onend = () => {
+      if (isListening) {
+        startListening();
+      } else {
+        setStatusText('Ready');
+        setStatusClass('status-idle');
+      }
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const generateResponse = (input: string) => {
+    if (input.includes('paid') || input.includes('payment') || input.includes('pay')) {
+      return `Thank you for confirming your payment, ${clientName}. Please ensure the payment is processed before the due date. Is there anything else I can help you with regarding your loan?`;
     }
+    if (input.includes('balance') || input.includes('outstanding') || input.includes('due amount')) {
+      return `Your current outstanding loan amount is ₹${totalDue}. Your next EMI of ₹${emiAmount} is due on ${new Date(dueDate).toLocaleDateString()}.`;
+    }
+    if (input.includes('emi') || input.includes('installment')) {
+      return `Your monthly EMI amount is ₹${emiAmount}. The due date for your next payment is ${new Date(dueDate).toLocaleDateString()}.`;
+    }
+    if (input.includes('extension') || input.includes('extend') || input.includes('delay')) {
+      return `I understand you're requesting an extension, ${clientName}. Please contact our customer service at 1800-123-4567 for payment extension requests. They will be able to assist you with the necessary arrangements.`;
+    }
+    if (input.includes('help') || input.includes('support')) {
+      return `I can help you with information about your loan balance, EMI amount, due dates, and payment confirmations, ${clientName}. For other queries, please contact our customer service at 1800-123-4567.`;
+    }
+    if (input.includes('bye') || input.includes('goodbye') || input.includes('thank you')) {
+      return `Thank you for your time, ${clientName}. Please remember to make your EMI payment of ₹${emiAmount} by ${new Date(dueDate).toLocaleDateString()}. Have a great day!`;
+    }
+    return `I understand your concern, ${clientName}. For detailed assistance with your loan account, please contact our customer service at 1800-123-4567. Is there anything specific about your EMI or payment that I can help clarify?`;
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    clientDataRef.current = {
+      name: clientName,
+      mobile: mobileNumber,
+      totalDue: parseFloat(totalDue),
+      emiAmount: parseFloat(emiAmount),
+      dueDate,
+    };
+    setSuccessMessage('Client data saved successfully');
   };
 
   return (
-    <LocalizationProvider dateAdapter={AdapterDateFns}>
-      <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
-        <Typography variant="h4" component="h1" gutterBottom>
-          AI Reminder (Connected to AWS)
-        </Typography>
+    <div className="container">
+      <div className="client-form">
+        <h1>Client Information</h1>
+        <p>Enter client details for EMI reminder call</p>
+        <form onSubmit={handleSubmit} id="clientForm">
+          <div className="form-group">
+            <label htmlFor="clientName">Client Name:</label>
+            <input
+              type="text"
+              id="clientName"
+              name="clientName"
+              required
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="mobileNumber">Mobile Number:</label>
+            <input
+              type="tel"
+              id="mobileNumber"
+              name="mobileNumber"
+              required
+              value={mobileNumber}
+              onChange={(e) => setMobileNumber(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="totalDue">Total Due Amount (₹):</label>
+            <input
+              type="number"
+              id="totalDue"
+              name="totalDue"
+              step="0.01"
+              required
+              value={totalDue}
+              onChange={(e) => setTotalDue(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="emiAmount">EMI Amount (₹):</label>
+            <input
+              type="number"
+              id="emiAmount"
+              name="emiAmount"
+              step="0.01"
+              required
+              value={emiAmount}
+              onChange={(e) => setEmiAmount(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="dueDate">Due Date:</label>
+            <input
+              type="date"
+              id="dueDate"
+              name="dueDate"
+              required
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+            />
+          </div>
+          <button type="submit" className="btn-primary" id="startCallBtn">
+            Start AI Call
+          </button>
+        </form>
 
-        {!audioInterfaceVisible ? (
-          <Paper elevation={3} sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Client Information
-            </Typography>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              Enter client details for EMI reminder call
-            </Typography>
+        <div className="audio-interface" id="audioInterface">
+          <div className="status-indicator">
+            <span className={`status-dot ${statusClass}`} id="statusDot"></span>
+            <span id="statusText">{statusText}</span>
+          </div>
 
-            <Box component="form" onSubmit={handleFormSubmit} sx={{ mt: 2 }}>
-              <Grid container spacing={3}>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    fullWidth
-                    label="Client Name"
-                    value={clientData.name}
-                    onChange={(e) => setClientData(prev => ({ ...prev, name: e.target.value }))}
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    fullWidth
-                    label="Mobile Number"
-                    type="tel"
-                    value={clientData.mobile}
-                    onChange={(e) => setClientData(prev => ({ ...prev, mobile: e.target.value }))}
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    fullWidth
-                    label="Total Due Amount (₹)"
-                    type="number"
-                    value={clientData.totalDue}
-                    onChange={(e) => setClientData(prev => ({ ...prev, totalDue: parseFloat(e.target.value) || 0 }))}
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    fullWidth
-                    label="EMI Amount (₹)"
-                    type="number"
-                    value={clientData.emiAmount}
-                    onChange={(e) => setClientData(prev => ({ ...prev, emiAmount: parseFloat(e.target.value) || 0 }))}
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <DatePicker
-                    label="Due Date"
-                    value={clientData.dueDate ? new Date(clientData.dueDate) : null}
-                    onChange={(date) => setClientData(prev => ({
-                      ...prev,
-                      dueDate: date ? date.toISOString().split('T')[0] : ''
-                    }))}
-                    slotProps={{ textField: { fullWidth: true, required: true } }}
-                  />
-                </Grid>
-              </Grid>
+          <div className="audio-controls">
+            <button
+              className="btn-audio btn-start"
+              id="startBtn"
+              onClick={startListening}
+              disabled={isListening}
+            >
+              Start Listening
+            </button>
+            <button
+              className="btn-audio btn-stop"
+              id="stopBtn"
+              onClick={stopListening}
+              disabled={!isListening}
+            >
+              Stop
+            </button>
+            <button
+              className="btn-audio"
+              id="testMicBtn"
+              style={{ background: '#17a2b8', color: 'white' }}
+              onClick={() => {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                  .then(() => alert('Microphone access granted!'))
+                  .catch(() => alert('Microphone access denied.'));
+              }}
+            >
+              Test Microphone
+            </button>
+          </div>
 
-              <Box sx={{ mt: 3 }}>
-                <Button
-                  type="submit"
-                  variant="contained"
-                  color="primary"
-                  size="large"
-                  fullWidth
-                >
-                  Start AI Call
-                </Button>
-              </Box>
-            </Box>
-          </Paper>
-        ) : (
-          <Grid container spacing={3}>
-            <Grid item xs={12}>
-              <Card>
-                <CardContent>
-                  <Box display="flex" alignItems="center" mb={2}>
-                    <Chip
-                      label={status}
-                      color={getStatusColor()}
-                      size="small"
-                      sx={{ mr: 1 }}
-                    />
-                    <Typography variant="body2" color="text.secondary">
-                      {new Date().toLocaleTimeString()}
-                    </Typography>
-                  </Box>
+          <div className="conversation-log" id="conversationLog">
+            {conversationLog.map((msg, idx) => (
+              <div key={idx} className={`message ${msg.sender}`}>
+                <div>{msg.message}</div>
+                <div className="message-time">{msg.time}</div>
+              </div>
+            ))}
+          </div>
 
-                  <Box display="flex" gap={1} mb={2}>
-                    <Button
-                      variant="contained"
-                      color={isListening ? "error" : "success"}
-                      startIcon={isListening ? <MicOff /> : <Mic />}
-                      onClick={isListening ? stopListening : startListening}
-                      disabled={isProcessing}
-                    >
-                      {isListening ? 'Stop Listening' : 'Start Listening'}
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      startIcon={<Mic />}
-                      onClick={testMicrophone}
-                    >
-                      Test Microphone
-                    </Button>
-                  </Box>
+          {errorMessage && <div className="error-message">{errorMessage}</div>}
+          {successMessage && <div className="success-message">{successMessage}</div>}
+        </div>
 
-                  <Box
-                    sx={{
-                      maxHeight: 400,
-                      overflowY: 'auto',
-                      border: '1px solid #e0e0e0',
-                      borderRadius: 1,
-                      p: 2,
-                      bgcolor: '#fafafa'
-                    }}
-                  >
-                    {messages.map((message) => (
-                      <Box
-                        key={message.id}
-                        sx={{
-                          mb: 2,
-                          p: 1,
-                          borderRadius: 1,
-                          bgcolor: message.sender === 'ai' ? '#e3f2fd' : '#f3e5f5',
-                          border: `1px solid ${message.sender === 'ai' ? '#bbdefb' : '#ce93d8'}`,
-                        }}
-                      >
-                        <Typography variant="body1">{message.text}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {message.timestamp.toLocaleTimeString()} - {message.sender.toUpperCase()}
-                        </Typography>
-                      </Box>
-                    ))}
-                    <div ref={messagesEndRef} />
-                  </Box>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        )}
-
-        {error && (
-          <Alert severity="error" sx={{ mt: 2 }} onClose={() => setError('')}>
-            {error}
-          </Alert>
-        )}
-
-        {success && (
-          <Alert severity="success" sx={{ mt: 2 }} onClose={() => setSuccess('')}>
-            {success}
-          </Alert>
-        )}
-
-        <audio ref={audioRef} />
-      </Container>
-    </LocalizationProvider>
+        <div style={{ marginTop: 20, textAlign: 'center' }}>
+          <button
+            onClick={() => {
+              sessionStorage.clear();
+              window.location.href = '/login';
+            }}
+            style={{ background: 'none', border: 'none', color: '#666', textDecoration: 'underline', cursor: 'pointer' }}
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };
 
-export default AiReminder;
+export default AiReminderUpdated;
